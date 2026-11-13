@@ -1,0 +1,31 @@
+{
+  "name": "whyconnect",
+  "version": "0.1.0",
+  "description": "WhyConnect - a photo & video SNS",
+  "main": "server/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "seed": "node server/seed.js --reset"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eunuparkeunupark/whyconnect.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/eunuparkeunupark/whyconnect/issues"
+  },
+  "homepage": "https://github.com/eunuparkeunupark/whyconnect#readme",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "express": "^5.3.0",
+    "multer": "^2.5.0"
+  }
+}
