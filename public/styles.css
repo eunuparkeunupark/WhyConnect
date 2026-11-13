@@ -27,10 +27,8 @@ img, video { display: block; max-width: 100%; }
   transition: background .15s, transform .15s;
 }
 .plus:hover { background: #cbcbcb; transform: scale(1.06); }
-.logo { display: inline-flex; align-items: center; font-family: 'Playfair Display', Georgia, 'Times New Roman', serif; font-weight: 800; font-size: 31px; letter-spacing: -.5px; }
-.logo-why { color: var(--teal); text-shadow: 1px 2px 2px rgba(0,0,0,.22); }
-.logo-connect { color: #0d0d0d; text-shadow: 1px 2px 2px rgba(0,0,0,.18); }
-.logo-globe { margin-left: 6px; width: 30px; height: 30px; background: var(--teal-bg); display: grid; place-items: center; box-shadow: 2px 3px 5px rgba(0,0,0,.22); }
+.logo { display: inline-flex; align-items: center; }
+.logo img { height: 42px; width: auto; }
 .account { position: absolute; right: 18px; top: 10px; }
 .avatar-btn { border: 0; padding: 0; background: none; border-radius: 50%; box-shadow: 0 2px 10px rgba(0,0,0,.3); }
 .login-btn { border: 0; background: var(--ink); color: #fff; font-weight: 600; font-size: 14px; padding: 10px 18px; border-radius: 999px; margin-top: 14px; }
@@ -150,7 +148,7 @@ main { padding: 0 16px 80px; }
 @media (max-width: 760px) {
   .topbar { height: 72px; }
   .plus { left: 14px; top: 19px; }
-  .logo { font-size: 26px; }
+  .logo img { height: 32px; }
   .account { right: 12px; top: 8px; }
   .login-btn { margin-top: 10px; padding: 8px 14px; }
   .profile .avatar { width: 108px; height: 108px; }
@@ -165,3 +163,8 @@ main { padding: 0 16px 80px; }
   .comments { max-height: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* google sign-in */
+.google-slot { display: flex; justify-content: center; min-height: 44px; margin-bottom: 4px; }
+.or { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; margin: 12px 0 14px; }
+.or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--line); }

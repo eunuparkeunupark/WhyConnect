@@ -29,6 +29,15 @@ Seed videos are generated with `ffmpeg` if it is installed (skipped otherwise).
 | `SEED=0 npm start` | don't seed demo data |
 | `DATA_DIR=/path npm start` | where the SQLite DB and uploads live (default `./data`) |
 
+## Google login
+
+1. [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → *Create credentials* → *OAuth client ID* → **Web application**.
+2. Add your site origin (e.g. `http://localhost:3000` and your production URL) to **Authorized JavaScript origins**. No redirect URI is needed.
+3. `cp .env.example .env` and set `GOOGLE_CLIENT_ID=...`, then restart.
+
+Without `GOOGLE_CLIENT_ID` the Google button is simply hidden and username/password login still works.
+First-time Google users get an account created automatically (username from their email prefix).
+
 ## Structure
 
 ```

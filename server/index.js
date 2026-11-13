@@ -3,10 +3,13 @@ import multer from 'multer';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { OAuth2Client } from 'google-auth-library';
 import { db, ROOT, UPLOAD_DIR, hashPassword, verifyPassword } from './db.js';
 import { seedIfEmpty } from './seed.js';
 
 const PORT = Number(process.env.PORT) || 3000;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 const SESSION_COOKIE = 'wc_session';
 const SESSION_MAX_AGE = 30 * 24 * 3600; // seconds
 
@@ -123,6 +126,34 @@ app.use('/uploads', express.static(UPLOAD_DIR, {
 app.use(express.static(path.join(ROOT, 'public')));
 
 // ----- auth -----
+app.get('/api/config', (req, res) => res.json({ googleClientId: GOOGLE_CLIENT_ID || null }));
+
+app.post('/api/auth/google', async (req, res) => {
+  if (!googleClient) throw new HttpError(503, 'Google login is not configured');
+  let payload;
+  try {
+    const ticket = await googleClient.verifyIdToken({ idToken: String(req.body.credential ?? ''), audience: GOOGLE_CLIENT_ID });
+    payload = ticket.getPayload();
+  } catch { throw new HttpError(401, 'Google sign-in failed'); }
+  if (!payload?.sub || !payload.email_verified) throw new HttpError(401, 'Google account email is not verified');
+
+  let user = db.prepare('SELECT * FROM users WHERE google_sub = ?').get(payload.sub);
+  if (!user) {
+    // derive a unique username from the email's local part
+    const base = (payload.email.split('@')[0].replace(/[^a-zA-Z0-9_.]/g, '') || 'user').slice(0, 18).padEnd(3, '_');
+    let username = base;
+    while (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) {
+      username = `${base}${crypto.randomInt(100, 99999)}`;
+    }
+    const { lastInsertRowid } = db.prepare(
+      'INSERT INTO users (username, name, avatar, password_hash, google_sub, created_at) VALUES (?,?,?,?,?,?)',
+    ).run(username, (payload.name || username).slice(0, 40), payload.picture || null, '!', payload.sub, now());
+    user = db.prepare('SELECT * FROM users WHERE id = ?').get(lastInsertRowid);
+  }
+  setSession(req, res, user.id);
+  res.json({ user: publicUser(user) });
+});
+
 app.get('/api/me', (req, res) => res.json({ user: publicUser(req.user) }));
 
 app.post('/api/signup', (req, res) => {

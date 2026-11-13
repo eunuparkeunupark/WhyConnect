@@ -56,6 +56,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS comments_post_idx ON comments(post_id, id);
 `);
 
+// migrations
+if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'google_sub')) {
+  db.exec('ALTER TABLE users ADD COLUMN google_sub TEXT');
+}
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_idx ON users(google_sub) WHERE google_sub IS NOT NULL');
+
 export function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.scryptSync(password, salt, 64).toString('hex');
@@ -64,6 +70,7 @@ export function hashPassword(password) {
 
 export function verifyPassword(password, stored) {
   const [salt, hash] = stored.split(':');
+  if (!salt || !hash) return false; // Google-only accounts have no password
   const a = Buffer.from(hash, 'hex');
   const b = crypto.scryptSync(password, salt, 64);
   return a.length === b.length && crypto.timingSafeEqual(a, b);

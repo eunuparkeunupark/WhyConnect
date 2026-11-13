@@ -48,7 +48,7 @@ function toast(msg) {
 
 function avatarEl(user, size) {
   const px = { width: `${size}px`, height: `${size}px` };
-  if (user?.avatar) return h('img', { class: 'avatar', src: user.avatar, alt: '', style: px });
+  if (user?.avatar) return h('img', { class: 'avatar', src: user.avatar, alt: '', referrerpolicy: 'no-referrer', style: px });
   const name = user?.name || '?';
   let hue = 0;
   for (const ch of name) hue = (hue * 31 + ch.charCodeAt(0)) % 360;
@@ -125,6 +125,43 @@ function closeModal() {
   lastFocus?.focus?.();
 }
 
+let googleConfig; // resolved once: client id or null
+let gsiPromise;
+function loadGoogle() {
+  googleConfig ??= api('/config').then((c) => c.googleClientId).catch(() => null);
+  return googleConfig.then((id) => {
+    if (!id) return null;
+    gsiPromise ??= new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
+      s.onload = () => resolve(window.google); s.onerror = () => reject(new Error('Google script failed to load'));
+      document.head.append(s);
+    });
+    return gsiPromise.then((google) => ({ google, id }));
+  });
+}
+
+function googleButton(then, err) {
+  const slot = h('div', { class: 'google-slot' });
+  const box = h('div', { hidden: true }, slot, h('div', { class: 'or' }, 'or'));
+  loadGoogle().then((g) => {
+    if (!g) return;
+    g.google.accounts.id.initialize({
+      client_id: g.id,
+      callback: async ({ credential }) => {
+        try {
+          me = (await api('/auth/google', { method: 'POST', body: { credential } })).user;
+          closeModal(); renderAccount(); toast(`Welcome, ${me.name}!`);
+          route(); then?.();
+        } catch (ex) { err.textContent = ex.message; }
+      },
+    });
+    box.hidden = false;
+    g.google.accounts.id.renderButton(slot, { theme: 'outline', size: 'large', shape: 'pill', text: 'continue_with', width: 280 });
+  }).catch(() => {});
+  return box;
+}
+
 function openAuthModal(mode = 'login', then) {
   const isSignup = mode === 'signup';
   const err = h('p', { class: 'form-error' });
@@ -135,6 +172,7 @@ function openAuthModal(mode = 'login', then) {
     autocomplete: isSignup ? 'new-password' : 'current-password', minlength: isSignup ? 8 : null,
   });
   const submit = h('button', { class: 'btn', type: 'submit' }, isSignup ? 'Create account' : 'Log in');
+  const gSlot = googleButton(then, err);
   const form = h('form', {
     onSubmit: async (e) => {
       e.preventDefault();
@@ -149,6 +187,7 @@ function openAuthModal(mode = 'login', then) {
     },
   },
   h('h2', {}, isSignup ? 'Join WhyConnect' : 'Welcome back'),
+  gSlot,
   h('label', { class: 'field' }, h('span', {}, 'Username'), username),
   isSignup && h('label', { class: 'field' }, h('span', {}, 'Display name'), name),
   h('label', { class: 'field' }, h('span', {}, `Password${isSignup ? ' (8+ characters)' : ''}`), password),
