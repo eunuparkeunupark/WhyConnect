@@ -1,58 +1,55 @@
 # WhyConnect 🌐
 
-A small photo & video social network.
+A small photo & video social network. **No server**: a static site (hosted on Vercel) talking directly to
+Firebase Auth (Google login), Firestore (data) and Cloud Storage (photos/videos), protected by security rules.
 
-- **Profile page** – avatar, name, bio, `ALL / Photo / Video` filter and a masonry grid of posts.
-- **Hover** a post → title + ❤ likes · 👁 views · 💬 comments appear over a softened preview.
-- **Click** a post → full post page with the media, author, stats, threaded comments and a comment box.
-- Upload photos & videos with the **+** button (video posters are generated in the browser).
-- Sign up / log in, like, comment, reply, edit your profile, delete your own posts/comments.
+- **Profile page** – avatar, name, bio, `ALL / Photo / Video` filter, masonry grid.
+- **Hover** a post → title + ❤ likes · 👁 views · 💬 comments. **Click** → full post page with threaded comments.
+- `+` uploads photos/videos (video posters are generated in the browser). Google login, likes, comments, replies, edit profile, delete own content.
 
-## Run it
+```
+public/            the whole site (index.html, styles.css, app.js UI, data.js Firebase layer, firebase-config.js)
+firebase/          firestore.rules + storage.rules  (must be published, see below)
+firebase.json      emulator + rules config      vercel.json   static hosting config
+```
 
-Requires Node.js **22.13+** (uses the built-in `node:sqlite`).
+## 1. Firebase setup (once)
+
+In the [Firebase console](https://console.firebase.google.com) → project `whyconnect-f9714`:
+
+1. **Authentication → Sign-in method → Google** → enable.
+2. **Authentication → Settings → Authorized domains** → add your site domain(s), e.g. `whyconnect.eunupark.com` and your `*.vercel.app` domain (`localhost` is there by default).
+3. **Firestore Database → Create database** (production mode, pick a region). Then **Rules** tab → paste `firebase/firestore.rules` → **Publish**.
+4. **Storage → Get started** (requires the **Blaze** pay-as-you-go plan; the free quota is generous). **Rules** tab → paste `firebase/storage.rules` → **Publish**.
+
+Or with the CLI: `npx firebase-tools login && npm run deploy:rules`.
+
+## 2. Run locally
 
 ```bash
 npm install
 npm start          # http://localhost:3000
 ```
 
-On first start the app seeds demo data (two users, a few posts, a comment thread).
-Demo logins: `eunu` / `demo1234` and `james` / `demo1234`.
-Seed videos are generated with `ffmpeg` if it is installed (skipped otherwise).
+Uses the real Firebase project. For a fully local sandbox run `npm run emulators` (needs Java) and open `http://localhost:3000/?emulator=1`;
+in that mode `wcEmulatorSignIn('me@example.com')` in the browser console signs in without the popup (reload afterwards).
 
-| Command | What it does |
-| --- | --- |
-| `npm run dev` | start with auto-reload |
-| `npm run seed` | wipe the DB and re-seed demo data |
-| `PORT=8080 npm start` | change the port |
-| `SEED=0 npm start` | don't seed demo data |
-| `DATA_DIR=/path npm start` | where the SQLite DB and uploads live (default `./data`) |
+## 3. Deploy on Vercel + custom domain
 
-## Google login (Firebase Auth)
+1. Import the GitHub repo in Vercel. `vercel.json` already sets *no build, output directory `public`*.
+2. Project → **Settings → Domains** → add `whyconnect.eunupark.com`. At your DNS provider create a **CNAME** record `whyconnect` → `cname.vercel-dns.com` (or the value Vercel shows).
+3. Add that domain to Firebase **Authorized domains** (step 1.2) – otherwise Google login fails with `auth/unauthorized-domain`.
 
-The browser signs in with Firebase (`signInWithPopup`), sends the Firebase ID token to `POST /api/auth/firebase`,
-the server verifies it with `firebase-admin` and issues the normal session cookie.
-
-1. Firebase console → Authentication → Sign-in method → enable **Google**.
-2. Authentication → Settings → **Authorized domains**: add your production domain (`localhost` is there by default).
-3. Web config lives in `public/firebase-config.js` (public values); the server uses `FIREBASE_PROJECT_ID` (see `.env.example`).
-
-## Structure
+## Data model
 
 ```
-server/   Express API, SQLite schema, seed script
-public/   index.html, styles.css, app.js  (vanilla JS, hash router: #/ · #/u/:username · #/p/:id)
-data/     SQLite DB + uploaded files (git-ignored)
+users/{uid}                  username (unique, lowercase), name, bio, avatar
+usernames/{username}         { uid }                     – claim record that keeps usernames unique
+posts/{id}                   uid, title, type, media, mediaPath, thumb, width, height, views, likes, comments, createdAt
+posts/{id}/likes/{uid}       like marker (one per user)
+posts/{id}/comments/{id}     uid, parentId, body, createdAt
 ```
 
-## API (JSON)
-
-`GET /api/me` · `POST /api/signup|login|logout` · `PATCH /api/me`
-`GET /api/users/:username` · `GET /api/posts?type=photo|video&user=` · `POST /api/posts` (multipart)
-`GET /api/posts/:id` · `POST /api/posts/:id/like|view|comments` · `DELETE /api/posts/:id` · `DELETE /api/comments/:id`
-
-## Notes / next steps
-
-- Uploads are stored on local disk, so deploy on a host with persistent storage (or swap in S3-style storage).
-- No rate limiting or email verification yet.
+Security rules enforce: you can only write as yourself; counters move by ±1 and likes are backed by a like document;
+only the author can delete a post; usernames are unique; uploads are limited by type/size and stored under your own uid.
+The `firebaseConfig` values in `public/firebase-config.js` are public identifiers, not secrets – the rules are what protect the data.

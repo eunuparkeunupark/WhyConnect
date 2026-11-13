@@ -1,4 +1,6 @@
 // WhyConnect front-end: tiny hash router + vanilla DOM (no build step).
+import * as data from './data.js';
+
 const $ = (sel, root = document) => root.querySelector(sel);
 
 /* ---------- helpers ---------- */
@@ -56,16 +58,6 @@ function avatarEl(user, size) {
   return h('span', { class: 'avatar', style: { ...px, background: `hsl(${hue} 45% 45%)` } }, initials);
 }
 
-async function api(path, { method = 'GET', body, form } = {}) {
-  const opts = { method, headers: {} };
-  if (form) opts.body = form;
-  else if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-  const res = await fetch(`/api${path}`, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || 'Something went wrong'), { status: res.status });
-  return data;
-}
-
 /* ---------- state ---------- */
 let me = null;
 let cleanup = () => {};
@@ -98,8 +90,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 async function logout() {
-  await api('/logout', { method: 'POST' });
-  firebase?.then((fb) => fb.signOut(fb.auth)).catch(() => {});
+  await data.logout();
   me = null;
   renderAccount();
   toast('Logged out');
@@ -126,80 +117,37 @@ function closeModal() {
   lastFocus?.focus?.();
 }
 
-let firebase; // lazily loaded SDK + auth instance
-async function loadFirebase() {
-  firebase ??= (async () => {
-    const V = '11.0.2';
-    const [{ initializeApp }, authLib, { firebaseConfig }] = await Promise.all([
-      import(`https://www.gstatic.com/firebasejs/${V}/firebase-app.js`),
-      import(`https://www.gstatic.com/firebasejs/${V}/firebase-auth.js`),
-      import('/firebase-config.js'),
-    ]);
-    return { ...authLib, auth: authLib.getAuth(initializeApp(firebaseConfig)) };
-  })();
-  try { return await firebase; } catch (e) { firebase = null; throw e; }
-}
-
 const GOOGLE_G = '<svg viewBox="0 0 48 48" width="18" height="18"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.6 5.9c4.4-4.1 7-10.1 7-17.6z"/><path fill="#FBBC05" d="M10.5 28.7a14.5 14.5 0 0 1 0-9.4l-7.9-6.1a24 24 0 0 0 0 21.6l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.9 2.3-8.3 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.500 42.600 14.600 48 24 48z"/></svg>';
 
-function googleButton(then, err) {
+const AUTH_ERRORS = {
+  'auth/popup-blocked': 'Please allow pop-ups for this site and try again.',
+  'auth/unauthorized-domain': 'This domain is not authorized in Firebase yet (Authentication → Settings → Authorized domains).',
+  'auth/operation-not-allowed': 'Google sign-in is not enabled in Firebase.',
+  'auth/network-request-failed': 'Network error. Check your connection and try again.',
+  'permission-denied': 'Firestore rules rejected this request. Make sure the security rules are published.',
+};
+
+function openAuthModal(mode, then) {
+  const err = h('p', { class: 'form-error' });
   const btn = h('button', { type: 'button', class: 'google-btn' }, h('span', { html: GOOGLE_G, style: { display: 'contents' } }), 'Continue with Google');
   btn.addEventListener('click', async () => {
     err.textContent = ''; btn.disabled = true;
     try {
-      const fb = await loadFirebase();
-      const result = await fb.signInWithPopup(fb.auth, new fb.GoogleAuthProvider());
-      me = (await api('/auth/firebase', { method: 'POST', body: { idToken: await result.user.getIdToken() } })).user;
+      me = await data.loginWithGoogle();
       closeModal(); renderAccount(); toast(`Welcome, ${me.name}!`);
       route(); then?.();
     } catch (ex) {
-      const quiet = ['auth/popup-closed-by-user', 'auth/cancelled-popup-request'];
-      if (!quiet.includes(ex.code)) {
-        err.textContent = ex.code === 'auth/popup-blocked' ? 'Please allow pop-ups for this site and try again.'
-          : ex.code === 'auth/unauthorized-domain' ? 'This domain is not authorized in Firebase yet.'
-          : ex.code === 'auth/operation-not-allowed' ? 'Google sign-in is not enabled in Firebase.'
-          : `${ex.message}${ex.status ? ` (HTTP ${ex.status})` : ex.code ? ` (${ex.code})` : ''}`;
+      if (!['auth/popup-closed-by-user', 'auth/cancelled-popup-request'].includes(ex.code)) {
+        err.textContent = AUTH_ERRORS[ex.code] || `${ex.message}${ex.code ? ` (${ex.code})` : ''}`;
       }
     } finally { btn.disabled = false; }
   });
-  return h('div', {}, h('div', { class: 'google-slot' }, btn), h('div', { class: 'or' }, 'or'));
-}
-
-function openAuthModal(mode = 'login', then) {
-  const isSignup = mode === 'signup';
-  const err = h('p', { class: 'form-error' });
-  const username = h('input', { name: 'username', autocomplete: 'username', required: true, maxlength: 24 });
-  const name = h('input', { name: 'name', autocomplete: 'name', maxlength: 40 });
-  const password = h('input', {
-    name: 'password', type: 'password', required: true,
-    autocomplete: isSignup ? 'new-password' : 'current-password', minlength: isSignup ? 8 : null,
-  });
-  const submit = h('button', { class: 'btn', type: 'submit' }, isSignup ? 'Create account' : 'Log in');
-  const gSlot = googleButton(then, err);
-  const form = h('form', {
-    onSubmit: async (e) => {
-      e.preventDefault();
-      err.textContent = ''; submit.disabled = true;
-      try {
-        const body = { username: username.value, password: password.value };
-        if (isSignup) body.name = name.value;
-        me = (await api(isSignup ? '/signup' : '/login', { method: 'POST', body })).user;
-        closeModal(); renderAccount(); toast(`Welcome, ${me.name}!`);
-        route(); then?.();
-      } catch (ex) { err.textContent = ex.message; submit.disabled = false; }
-    },
-  },
-  h('h2', {}, isSignup ? 'Join WhyConnect' : 'Welcome back'),
-  gSlot,
-  h('label', { class: 'field' }, h('span', {}, 'Username'), username),
-  isSignup && h('label', { class: 'field' }, h('span', {}, 'Display name'), name),
-  h('label', { class: 'field' }, h('span', {}, `Password${isSignup ? ' (8+ characters)' : ''}`), password),
-  err,
-  h('div', { class: 'row' }, h('button', { class: 'btn ghost', type: 'button', onClick: closeModal }, 'Cancel'), submit),
-  h('p', { class: 'switch' }, isSignup ? 'Already have an account? ' : 'New here? ',
-    h('button', { type: 'button', onClick: () => openAuthModal(isSignup ? 'login' : 'signup', then) }, isSignup ? 'Log in' : 'Sign up')),
-  !isSignup && h('p', { class: 'hint' }, 'Demo: eunu / demo1234  ·  james / demo1234'));
-  openModal(form);
+  openModal(h('div', {},
+    h('h2', {}, 'Join WhyConnect'),
+    h('p', { class: 'hint', style: { margin: '0 0 16px', textAlign: 'left' } }, 'Log in to post, like and comment.'),
+    h('div', { class: 'google-slot' }, btn),
+    err,
+    h('div', { class: 'row' }, h('button', { class: 'btn ghost', type: 'button', onClick: closeModal }, 'Cancel'))));
 }
 
 function requireLogin(then) {
@@ -241,7 +189,7 @@ function readMedia(file) {
 
 function openUploadModal() {
   if (!requireLogin(openUploadModal)) return;
-  let file = null; let info = null; let xhr = null;
+  let file = null; let info = null; let abort = null;
   const input = h('input', { type: 'file', class: 'sr', accept: 'image/jpeg,image/png,image/webp,image/gif,image/avif,video/mp4,video/webm,video/quicktime' });
   const drop = h('button', { type: 'button', class: 'drop', onClick: () => input.click() },
     h('div', {}, h('b', {}, 'Choose a photo or video'), h('br'), 'or drag it here'));
@@ -253,6 +201,9 @@ function openUploadModal() {
   async function pick(f) {
     err.textContent = '';
     if (!f) return;
+    if (!/^(image\/(jpeg|png|webp|gif|avif)|video\/(mp4|webm|quicktime))$/.test(f.type)) {
+      err.textContent = 'Unsupported file type. Use JPG, PNG, WebP, GIF, AVIF, MP4, WebM or MOV.'; return;
+    }
     try {
       if (info) URL.revokeObjectURL(info.url);
       info = await readMedia(f); file = f;
@@ -270,36 +221,33 @@ function openUploadModal() {
   drop.addEventListener('drop', (e) => pick(e.dataTransfer.files[0]));
 
   const form = h('form', {
-    onSubmit: (e) => {
+    onSubmit: async (e) => {
       e.preventDefault();
       if (!file) return;
-      const fd = new FormData();
-      fd.append('title', title.value.trim());
-      fd.append('width', info.width); fd.append('height', info.height);
-      if (info.thumb) fd.append('thumb', info.thumb, 'thumb.jpg');
-      fd.append('media', file); // media last so text fields are parsed first
       submit.disabled = true; progress.hidden = false; err.textContent = '';
-      xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/posts');
-      xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) bar.style.width = `${(ev.loaded / ev.total) * 100}%`; };
-      xhr.onload = () => {
-        let data = {};
-        try { data = JSON.parse(xhr.responseText); } catch { /* ignore */ }
-        if (xhr.status === 201) {
-          const target = `#/u/${me.username}`;
-          closeModal(); toast('Posted!');
-          if (location.hash === target) route(); else location.hash = target;
-        } else { err.textContent = data.error || 'Upload failed'; submit.disabled = false; progress.hidden = true; }
-      };
-      xhr.onerror = () => { err.textContent = 'Network error'; submit.disabled = false; progress.hidden = true; };
-      xhr.send(fd);
+      abort = new AbortController();
+      try {
+        await data.createPost({
+          file, thumb: info.thumb, title: title.value.trim(), width: info.width, height: info.height,
+          signal: abort.signal, onProgress: (f) => { bar.style.width = `${f * 100}%`; },
+        });
+        const target = `#/u/${me.username}`;
+        closeModal(); toast('Posted!');
+        if (location.hash === target) route(); else location.hash = target;
+      } catch (ex) {
+        if (ex.code === 'storage/canceled') return;
+        err.textContent = (ex.code === 'storage/unauthorized' || ex.code === 'permission-denied'
+          ? 'Upload was rejected. Check the file type/size (max 200MB) and that Firebase rules are published.'
+          : ex.message) + (ex.code ? ` (${ex.code})` : '');
+        submit.disabled = false; progress.hidden = true;
+      }
     },
   },
   h('h2', {}, 'New post'), input, drop,
   h('label', { class: 'field' }, h('span', {}, 'Title'), title),
   progress, err,
   h('div', { class: 'row' }, h('button', { class: 'btn ghost', type: 'button', onClick: closeModal }, 'Cancel'), submit));
-  openModal(form, { onClose: () => { xhr?.abort(); if (info) URL.revokeObjectURL(info.url); } });
+  openModal(form, { onClose: () => { abort?.abort(); if (info) URL.revokeObjectURL(info.url); } });
 }
 
 function openEditProfile() {
@@ -316,13 +264,10 @@ function openEditProfile() {
   openModal(h('form', {
     onSubmit: async (e) => {
       e.preventDefault(); submit.disabled = true; err.textContent = '';
-      const fd = new FormData();
-      fd.append('name', name.value.trim()); fd.append('bio', bio.value);
-      if (file.files[0]) fd.append('avatar', file.files[0]);
       try {
-        me = (await api('/me', { method: 'PATCH', form: fd })).user;
+        me = await data.updateProfile({ name: name.value.trim(), bio: bio.value, avatarFile: file.files[0] });
         closeModal(); renderAccount(); toast('Profile updated'); route();
-      } catch (ex) { err.textContent = ex.message; submit.disabled = false; }
+      } catch (ex) { err.textContent = AUTH_ERRORS[ex.code] || ex.message; submit.disabled = false; }
     },
   },
   h('h2', {}, 'Edit profile'),
@@ -377,7 +322,8 @@ async function viewFeed({ username, home } = {}) {
   let type = '';
   let profile = null;
   if (username) {
-    try { profile = (await api(`/users/${encodeURIComponent(username)}`)).user; } catch (e) { return status('error-box', e.message); }
+    try { profile = await data.getUserByUsername(username); } catch (e) { return status('error-box', e.message); }
+    if (!profile) return status('error-box', 'User not found');
   }
   const gridBox = h('div');
   const chips = ['', 'photo', 'video'].map((t) => h('button', {
@@ -397,11 +343,8 @@ async function viewFeed({ username, home } = {}) {
   let m = null;
   async function load() {
     m?.stop();
-    const q = new URLSearchParams();
-    if (type) q.set('type', type);
-    if (username) q.set('user', username);
     let posts;
-    try { posts = (await api(`/posts?${q}`)).posts; } catch (e) { return gridBox.replaceChildren(h('div', { class: 'error-box' }, e.message)); }
+    try { posts = await data.listPosts({ type, uid: profile?.id }); } catch (e) { return gridBox.replaceChildren(h('div', { class: 'error-box' }, e.message)); }
     if (!posts.length) {
       m = null;
       return gridBox.replaceChildren(h('div', { class: 'empty' },
@@ -416,9 +359,10 @@ async function viewFeed({ username, home } = {}) {
 }
 
 async function viewPost(id) {
-  let data;
-  try { data = await api(`/posts/${id}`); } catch (e) { return status('error-box', e.message); }
-  const { post, comments } = data;
+  let res;
+  try { res = await data.getPost(id); } catch (e) { return status('error-box', e.message); }
+  if (!res) return status('error-box', 'Post not found');
+  const { post, comments } = res;
   let replyTo = null;
   const list = h('div', { class: 'comments', 'aria-label': 'Comments' });
   const input = h('input', { type: 'text', maxlength: 500, placeholder: 'Type what you think...', 'aria-label': 'Add a comment', autocomplete: 'off' });
@@ -442,10 +386,11 @@ async function viewPost(id) {
       h('div', { class: 'body' }, c.body),
       h('div', { class: 'actions' },
         h('button', { onClick: () => { if (requireLogin()) setReply(c); } }, 'Reply'),
-        me?.id === c.author.id && h('button', {
+        (me?.id === c.author.id || me?.id === post.author.id) && h('button', {
           onClick: async () => {
-            try { await api(`/comments/${c.id}`, { method: 'DELETE' }); } catch (e) { return toast(e.message); }
-            comments.splice(0, comments.length, ...comments.filter((x) => x.id !== c.id && x.parentId !== c.id));
+            const gone = comments.filter((x) => x.id === c.id || x.parentId === c.id).map((x) => x.id);
+            try { await data.deleteComments(post.id, gone); } catch (e) { return toast(e.message); }
+            comments.splice(0, comments.length, ...comments.filter((x) => !gone.includes(x.id)));
             commentCount.textContent = comments.length;
             paintComments();
           },
@@ -470,7 +415,7 @@ async function viewPost(id) {
       if (!body || !requireLogin()) return;
       input.disabled = true;
       try {
-        const { comment } = await api(`/posts/${post.id}/comments`, { method: 'POST', body: { body, parentId: replyTo?.id } });
+        const comment = await data.addComment(post.id, body, replyTo);
         comments.push(comment);
         commentCount.textContent = comments.length;
         input.value = ''; setReply(null); paintComments();
@@ -483,7 +428,7 @@ async function viewPost(id) {
   const like = h('button', { class: 'like-btn', 'aria-pressed': String(post.liked), 'aria-label': 'Like', onClick: async () => {
     if (!requireLogin()) return;
     try {
-      const r = await api(`/posts/${post.id}/like`, { method: 'POST' });
+      const r = await data.toggleLike(post.id);
       like.setAttribute('aria-pressed', String(r.liked)); heartLabel.textContent = r.likes;
     } catch (e) { toast(e.message); }
   } }, icon('heart'), heartLabel);
@@ -507,7 +452,7 @@ async function viewPost(id) {
             class: 'del-post',
             onClick: async () => {
               if (!confirm('Delete this post?')) return;
-              try { await api(`/posts/${post.id}`, { method: 'DELETE' }); } catch (e) { return toast(e.message); }
+              try { await data.deletePost(post); } catch (e) { return toast(e.message); }
               toast('Post deleted'); location.hash = `#/u/${me.username}`;
             },
           }, 'Delete')),
@@ -518,7 +463,7 @@ async function viewPost(id) {
   let seen = false;
   try { seen = !!sessionStorage.getItem(seenKey); sessionStorage.setItem(seenKey, '1'); } catch { /* storage blocked */ }
   if (!seen) {
-    api(`/posts/${post.id}/view`, { method: 'POST' })
+    data.addView(post.id)
       .then(() => { post.views += 1; viewsEl.textContent = post.views; }).catch(() => {});
   }
 }
@@ -543,7 +488,7 @@ window.addEventListener('hashchange', route);
 $('#new-post').addEventListener('click', openUploadModal);
 
 (async () => {
-  try { me = (await api('/me')).user; } catch { me = null; }
+  me = await data.initAuth();
   renderAccount();
   route();
 })();
