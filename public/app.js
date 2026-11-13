@@ -99,6 +99,7 @@ document.addEventListener('keydown', (e) => {
 
 async function logout() {
   await api('/logout', { method: 'POST' });
+  firebase?.then((fb) => fb.signOut(fb.auth)).catch(() => {});
   me = null;
   renderAccount();
   toast('Logged out');
@@ -125,41 +126,43 @@ function closeModal() {
   lastFocus?.focus?.();
 }
 
-let googleConfig; // resolved once: client id or null
-let gsiPromise;
-function loadGoogle() {
-  googleConfig ??= api('/config').then((c) => c.googleClientId).catch(() => null);
-  return googleConfig.then((id) => {
-    if (!id) return null;
-    gsiPromise ??= new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
-      s.onload = () => resolve(window.google); s.onerror = () => reject(new Error('Google script failed to load'));
-      document.head.append(s);
-    });
-    return gsiPromise.then((google) => ({ google, id }));
-  });
+let firebase; // lazily loaded SDK + auth instance
+async function loadFirebase() {
+  firebase ??= (async () => {
+    const V = '11.0.2';
+    const [{ initializeApp }, authLib, { firebaseConfig }] = await Promise.all([
+      import(`https://www.gstatic.com/firebasejs/${V}/firebase-app.js`),
+      import(`https://www.gstatic.com/firebasejs/${V}/firebase-auth.js`),
+      import('/firebase-config.js'),
+    ]);
+    return { ...authLib, auth: authLib.getAuth(initializeApp(firebaseConfig)) };
+  })();
+  try { return await firebase; } catch (e) { firebase = null; throw e; }
 }
 
+const GOOGLE_G = '<svg viewBox="0 0 48 48" width="18" height="18"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.6 5.9c4.4-4.1 7-10.1 7-17.6z"/><path fill="#FBBC05" d="M10.5 28.7a14.5 14.5 0 0 1 0-9.4l-7.9-6.1a24 24 0 0 0 0 21.6l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.9 2.3-8.3 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.500 42.600 14.600 48 24 48z"/></svg>';
+
 function googleButton(then, err) {
-  const slot = h('div', { class: 'google-slot' });
-  const box = h('div', { hidden: true }, slot, h('div', { class: 'or' }, 'or'));
-  loadGoogle().then((g) => {
-    if (!g) return;
-    g.google.accounts.id.initialize({
-      client_id: g.id,
-      callback: async ({ credential }) => {
-        try {
-          me = (await api('/auth/google', { method: 'POST', body: { credential } })).user;
-          closeModal(); renderAccount(); toast(`Welcome, ${me.name}!`);
-          route(); then?.();
-        } catch (ex) { err.textContent = ex.message; }
-      },
-    });
-    box.hidden = false;
-    g.google.accounts.id.renderButton(slot, { theme: 'outline', size: 'large', shape: 'pill', text: 'continue_with', width: 280 });
-  }).catch(() => {});
-  return box;
+  const btn = h('button', { type: 'button', class: 'google-btn' }, h('span', { html: GOOGLE_G, style: { display: 'contents' } }), 'Continue with Google');
+  btn.addEventListener('click', async () => {
+    err.textContent = ''; btn.disabled = true;
+    try {
+      const fb = await loadFirebase();
+      const result = await fb.signInWithPopup(fb.auth, new fb.GoogleAuthProvider());
+      me = (await api('/auth/firebase', { method: 'POST', body: { idToken: await result.user.getIdToken() } })).user;
+      closeModal(); renderAccount(); toast(`Welcome, ${me.name}!`);
+      route(); then?.();
+    } catch (ex) {
+      const quiet = ['auth/popup-closed-by-user', 'auth/cancelled-popup-request'];
+      if (!quiet.includes(ex.code)) {
+        err.textContent = ex.code === 'auth/popup-blocked' ? 'Please allow pop-ups for this site and try again.'
+          : ex.code === 'auth/unauthorized-domain' ? 'This domain is not authorized in Firebase yet.'
+          : ex.code === 'auth/operation-not-allowed' ? 'Google sign-in is not enabled in Firebase.'
+          : ex.message;
+      }
+    } finally { btn.disabled = false; }
+  });
+  return h('div', {}, h('div', { class: 'google-slot' }, btn), h('div', { class: 'or' }, 'or'));
 }
 
 function openAuthModal(mode = 'login', then) {

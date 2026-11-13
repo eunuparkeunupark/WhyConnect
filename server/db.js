@@ -57,10 +57,10 @@ db.exec(`
 `);
 
 // migrations
-if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'google_sub')) {
-  db.exec('ALTER TABLE users ADD COLUMN google_sub TEXT');
-}
-db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_idx ON users(google_sub) WHERE google_sub IS NOT NULL');
+const userCols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+if (userCols.includes('google_sub')) db.exec('DROP INDEX IF EXISTS users_google_sub_idx; ALTER TABLE users RENAME COLUMN google_sub TO firebase_uid');
+else if (!userCols.includes('firebase_uid')) db.exec('ALTER TABLE users ADD COLUMN firebase_uid TEXT');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_firebase_uid_idx ON users(firebase_uid) WHERE firebase_uid IS NOT NULL');
 
 export function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');

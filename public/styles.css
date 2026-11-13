@@ -168,3 +168,6 @@ main { padding: 0 16px 80px; }
 .google-slot { display: flex; justify-content: center; min-height: 44px; margin-bottom: 4px; }
 .or { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; margin: 12px 0 14px; }
 .or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.google-btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; width: 100%; max-width: 320px; height: 44px; border: 1px solid #dadce0; background: #fff; border-radius: 999px; font-size: 14px; font-weight: 600; color: #3c4043; transition: background .15s, box-shadow .15s; }
+.google-btn:hover { background: #f8f9fa; box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+.google-btn:disabled { opacity: .6; cursor: default; }
