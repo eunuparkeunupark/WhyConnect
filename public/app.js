@@ -1,5 +1,7 @@
 // WhyConnect front-end: tiny hash router + vanilla DOM (no build step).
 import * as data from './data.js';
+import { renderComposer } from './composer.js';
+import { sanitizeToFragment } from './richtext.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -156,100 +158,6 @@ function requireLogin(then) {
   return false;
 }
 
-/* ---------- media helpers (dimensions + video poster) ---------- */
-function readMedia(file) {
-  const url = URL.createObjectURL(file);
-  if (file.type.startsWith('image/')) {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve({ url, width: img.naturalWidth, height: img.naturalHeight, kind: 'photo' });
-      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Can't read this image")); };
-      img.src = url;
-    });
-  }
-  return new Promise((resolve, reject) => {
-    const v = document.createElement('video');
-    v.preload = 'metadata'; v.muted = true; v.playsInline = true;
-    v.onloadeddata = () => {
-      const finish = () => {
-        const w = v.videoWidth; const hgt = v.videoHeight;
-        const scale = Math.min(1, 720 / Math.max(w, hgt));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(w * scale); canvas.height = Math.round(hgt * scale);
-        canvas.getContext('2d').drawImage(v, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob((thumb) => resolve({ url, width: w, height: hgt, kind: 'video', thumb }), 'image/jpeg', 0.85);
-      };
-      v.onseeked = finish;
-      v.currentTime = Math.min(1, (v.duration || 2) / 2);
-    };
-    v.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Can't read this video")); };
-    v.src = url;
-  });
-}
-
-function openUploadModal() {
-  if (!requireLogin(openUploadModal)) return;
-  let file = null; let info = null; let abort = null;
-  const input = h('input', { type: 'file', class: 'sr', accept: 'image/jpeg,image/png,image/webp,image/gif,image/avif,video/mp4,video/webm,video/quicktime' });
-  const drop = h('button', { type: 'button', class: 'drop', onClick: () => input.click() },
-    h('div', {}, h('b', {}, 'Choose a photo or video'), h('br'), 'or drag it here'));
-  const title = h('input', { maxlength: 100, placeholder: 'Give it a title', required: true });
-  const err = h('p', { class: 'form-error' });
-  const bar = h('i'); const progress = h('div', { class: 'progress', hidden: true }, bar);
-  const submit = h('button', { class: 'btn', type: 'submit', disabled: true }, 'Post');
-
-  async function pick(f) {
-    err.textContent = '';
-    if (!f) return;
-    if (!/^(image\/(jpeg|png|webp|gif|avif)|video\/(mp4|webm|quicktime))$/.test(f.type)) {
-      err.textContent = 'Unsupported file type. Use JPG, PNG, WebP, GIF, AVIF, MP4, WebM or MOV.'; return;
-    }
-    try {
-      if (info) URL.revokeObjectURL(info.url);
-      info = await readMedia(f); file = f;
-      drop.classList.add('has');
-      drop.replaceChildren(info.kind === 'video'
-        ? h('video', { src: info.url, controls: true, muted: true, playsinline: true })
-        : h('img', { src: info.url, alt: 'Preview' }));
-      if (!title.value) title.value = f.name.replace(/\.[^.]+$/, '').slice(0, 100);
-      submit.disabled = false;
-    } catch (ex) { err.textContent = ex.message; }
-  }
-  input.addEventListener('change', () => pick(input.files[0]));
-  ['dragenter', 'dragover'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('over'); }));
-  ['dragleave', 'drop'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
-  drop.addEventListener('drop', (e) => pick(e.dataTransfer.files[0]));
-
-  const form = h('form', {
-    onSubmit: async (e) => {
-      e.preventDefault();
-      if (!file) return;
-      submit.disabled = true; progress.hidden = false; err.textContent = '';
-      abort = new AbortController();
-      try {
-        await data.createPost({
-          file, thumb: info.thumb, title: title.value.trim(), width: info.width, height: info.height,
-          signal: abort.signal, onProgress: (f) => { bar.style.width = `${f * 100}%`; },
-        });
-        const target = `#/u/${me.username}`;
-        closeModal(); toast('Posted!');
-        if (location.hash === target) route(); else location.hash = target;
-      } catch (ex) {
-        if (ex.code === 'storage/canceled') return;
-        err.textContent = (ex.code === 'storage/unauthorized' || ex.code === 'permission-denied'
-          ? 'Upload was rejected. Check the file type/size (max 200MB) and that Firebase rules are published.'
-          : ex.message) + (ex.code ? ` (${ex.code})` : '');
-        submit.disabled = false; progress.hidden = true;
-      }
-    },
-  },
-  h('h2', {}, 'New post'), input, drop,
-  h('label', { class: 'field' }, h('span', {}, 'Title'), title),
-  progress, err,
-  h('div', { class: 'row' }, h('button', { class: 'btn ghost', type: 'button', onClick: closeModal }, 'Cancel'), submit));
-  openModal(form, { onClose: () => { abort?.abort(); if (info) URL.revokeObjectURL(info.url); } });
-}
-
 function openEditProfile() {
   const name = h('input', { value: me.name, maxlength: 40, required: true });
   const bio = h('textarea', { rows: 3, maxlength: 200 }, me.bio || '');
@@ -281,15 +189,21 @@ function openEditProfile() {
 /* ---------- masonry grid ---------- */
 function postCard(p) {
   const ratio = Math.min(2.2, Math.max(0.45, p.width / p.height));
+  const overlay = h('div', { class: 'over' },
+    h('div', { class: 't' }, p.title),
+    h('div', { class: 'stats' }, statEl('heart', p.likes), statEl('eye', p.views), statEl('chat', p.comments)));
+  if (p.type === 'post' && !p.thumb) { // text-only article: show the title + start of the text
+    return h('a', { class: 'card text-card', href: `#/p/${p.id}`, style: { aspectRatio: '1' }, 'aria-label': p.title },
+      h('div', { class: 'tc' }, h('div', { class: 'tc-tag' }, 'Post'), h('div', { class: 'tc-title' }, p.title), h('div', { class: 'tc-text' }, p.excerpt)),
+      overlay);
+  }
   const media = p.thumb || p.type === 'photo'
     ? h('img', { src: p.thumb || p.media, alt: p.title, loading: 'lazy', draggable: 'false' })
     : h('video', { src: `${p.media}#t=0.1`, preload: 'metadata', muted: true, playsinline: true });
   return h('a', { class: 'card', href: `#/p/${p.id}`, style: { aspectRatio: String(ratio) }, 'aria-label': p.title },
     media,
     p.type === 'video' && h('span', { class: 'play', html: ICONS.play }),
-    h('div', { class: 'over' },
-      h('div', { class: 't' }, p.title),
-      h('div', { class: 'stats' }, statEl('heart', p.likes), statEl('eye', p.views), statEl('chat', p.comments))));
+    overlay);
 }
 
 function masonry(posts) {
@@ -326,10 +240,12 @@ async function viewFeed({ username, home } = {}) {
     if (!profile) return status('error-box', 'User not found');
   }
   const gridBox = h('div');
-  const chips = ['', 'photo', 'video'].map((t) => h('button', {
+  const TYPES = ['', 'photo', 'video', 'post'];
+  const LABELS = { '': 'ALL', photo: 'Photo', video: 'Video', post: 'Post' };
+  const chips = TYPES.map((t) => h('button', {
     class: 'chip', 'aria-pressed': String(t === type),
-    onClick: () => { type = t; chips.forEach((c, i) => c.setAttribute('aria-pressed', String(['', 'photo', 'video'][i] === t))); load(); },
-  }, t === '' ? 'ALL' : t === 'photo' ? 'Photo' : 'Video'));
+    onClick: () => { type = t; chips.forEach((c, i) => c.setAttribute('aria-pressed', String(TYPES[i] === t))); load(); },
+  }, LABELS[t]));
 
   app.replaceChildren(
     profile && h('section', { class: 'profile' },
@@ -356,6 +272,22 @@ async function viewFeed({ username, home } = {}) {
   }
   cleanup = () => m?.stop();
   await load();
+}
+
+const MEDIA_HOSTS = ['firebasestorage.googleapis.com', 'storage.googleapis.com', 'localhost', '127.0.0.1'];
+function safeMediaUrl(u) {
+  try { const x = new URL(u); return ['http:', 'https:'].includes(x.protocol) && (MEDIA_HOSTS.includes(x.hostname) || x.hostname.endsWith('.firebasestorage.app')); } catch { return false; }
+}
+
+function blockEl(b) {
+  const ok = b.media && safeMediaUrl(b.media);
+  const media = !ok ? null : b.mediaType === 'video'
+    ? h('video', { src: b.media, poster: b.thumb && safeMediaUrl(b.thumb) ? b.thumb : null, controls: true, playsinline: true, preload: 'metadata' })
+    : h('img', { src: b.media, alt: '', loading: 'lazy' });
+  const text = h('div', { class: 'block-text' });
+  text.append(sanitizeToFragment(b.html)); // never trust stored HTML
+  return h('section', { class: `block${b.side === 'right' ? ' right' : ''}${media ? '' : ' no-media'}` },
+    media && h('div', { class: 'block-media' }, media), text);
 }
 
 async function viewPost(id) {
@@ -433,30 +365,42 @@ async function viewPost(id) {
     } catch (e) { toast(e.message); }
   } }, icon('heart'), heartLabel);
 
-  const media = post.type === 'video'
-    ? h('video', { src: post.media, poster: post.thumb || null, controls: true, playsinline: true, preload: 'metadata' })
-    : h('img', { src: post.media, alt: post.title });
+  const statsRow = h('div', { class: 'post-stats' },
+    like,
+    h('span', { class: 'stat' }, icon('eye'), viewsEl),
+    h('span', { class: 'stat' }, icon('chat'), commentCount),
+    me?.id === post.author.id && h('button', {
+      class: 'del-post',
+      onClick: async () => {
+        if (!confirm('Delete this post?')) return;
+        try { await data.deletePost(post); } catch (e) { return toast(e.message); }
+        toast('Post deleted'); location.hash = `#/u/${me.username}`;
+      },
+    }, 'Delete'));
+  const authorEl = h('a', { class: 'author', href: `#/u/${post.author.username}` }, avatarEl(post.author, 44), post.author.name);
+  const back = () => h('a', { class: 'back', href: `#/u/${post.author.username}` }, icon('back'), `Go back to ${post.author.name}'s page`);
 
-  app.replaceChildren(h('div', { class: 'post-wrap' },
-    h('a', { class: 'back', href: `#/u/${post.author.username}` }, icon('back'), `Go back to ${post.author.name}'s page`),
-    h('article', { class: 'post-card' },
-      h('div', { class: 'media' }, media),
-      h('div', { class: 'side' },
-        h('a', { class: 'author', href: `#/u/${post.author.username}` }, avatarEl(post.author, 44), post.author.name),
-        h('h1', { class: 'post-title' }, post.title),
-        h('div', { class: 'post-stats' },
-          like,
-          h('span', { class: 'stat' }, icon('eye'), viewsEl),
-          h('span', { class: 'stat' }, icon('chat'), commentCount),
-          me?.id === post.author.id && h('button', {
-            class: 'del-post',
-            onClick: async () => {
-              if (!confirm('Delete this post?')) return;
-              try { await data.deletePost(post); } catch (e) { return toast(e.message); }
-              toast('Post deleted'); location.hash = `#/u/${me.username}`;
-            },
-          }, 'Delete')),
-        list, compose))));
+  if (post.type === 'post') {
+    app.replaceChildren(h('div', { class: 'post-wrap wide' },
+      back(),
+      h('article', { class: 'post-card article' },
+        authorEl,
+        h('div', { class: 'article-titlebar' }, h('h1', { class: 'post-title' }, post.title), h('span', { class: 'badge' }, 'Post')),
+        statsRow,
+        h('div', { class: 'blocks' }, post.blocks.map(blockEl)),
+        h('hr', { class: 'article-rule' }),
+        list, compose),
+      back()));
+  } else {
+    const media = post.type === 'video'
+      ? h('video', { src: post.media, poster: post.thumb || null, controls: true, playsinline: true, preload: 'metadata' })
+      : h('img', { src: post.media, alt: post.title });
+    app.replaceChildren(h('div', { class: 'post-wrap' },
+      back(),
+      h('article', { class: 'post-card' },
+        h('div', { class: 'media' }, media),
+        h('div', { class: 'side' }, authorEl, h('h1', { class: 'post-title' }, post.title), statsRow, list, compose))));
+  }
   document.title = `${post.title} · WhyConnect`;
 
   const seenKey = `wc-viewed-${post.id}`;
@@ -477,6 +421,11 @@ async function route() {
   document.title = 'WhyConnect';
   const [, kind, arg] = location.hash.match(/^#\/(u|p)\/([^/?#]+)/) || [];
   window.scrollTo(0, 0);
+  if (location.hash === '#/new') {
+    if (!me) { location.hash = '#/'; openAuthModal('login', () => { location.hash = '#/new'; }); return; }
+    cleanup = renderComposer({ app, me, h, avatarEl, toast, data, go: (hash) => { location.hash = hash; } });
+    return;
+  }
   if (kind === 'p') await viewPost(decodeURIComponent(arg));
   else if (kind === 'u') { await viewFeed({ username: decodeURIComponent(arg) }); }
   else await viewFeed({ home: true });
@@ -485,7 +434,9 @@ async function route() {
 }
 
 window.addEventListener('hashchange', route);
-$('#new-post').addEventListener('click', openUploadModal);
+$('#new-post').addEventListener('click', () => {
+  if (requireLogin(() => { location.hash = '#/new'; })) location.hash = '#/new';
+});
 
 (async () => {
   me = await data.initAuth();

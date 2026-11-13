@@ -4,11 +4,12 @@ A small photo & video social network. **No server**: a static site (hosted on Ve
 Firebase Auth (Google login), Firestore (data) and Cloud Storage (photos/videos), protected by security rules.
 
 - **Profile page** – avatar, name, bio, `ALL / Photo / Video` filter, masonry grid.
+- Three kinds of content: **Photo**, **Video** and **Post** (a title plus rows of formatted text with an optional photo/video on the left or right). The profile filter is `ALL / Photo / Video / Post`.
 - **Hover** a post → title + ❤ likes · 👁 views · 💬 comments. **Click** → full post page with threaded comments.
-- `+` uploads photos/videos (video posters are generated in the browser). Google login, likes, comments, replies, edit profile, delete own content.
+- `+` opens the composer (`#/new`): pick Post / Photo / Video, add media, format text (font, size, bold/italic/underline, text & highlight color), `+` adds a row, `→` moves the media to the other side. Video posters are generated in the browser. Google login, likes, comments, replies, edit profile, delete own content.
 
 ```
-public/            the whole site (index.html, styles.css, app.js UI, data.js Firebase layer, firebase-config.js)
+public/            the whole site (index.html, styles.css, app.js UI, composer.js, richtext.js, data.js Firebase layer, firebase-config.js)
 firebase/          firestore.rules + storage.rules  (must be published, see below)
 firebase.json      emulator + rules config      vercel.json   static hosting config
 ```
@@ -45,11 +46,13 @@ in that mode `wcEmulatorSignIn('me@example.com')` in the browser console signs i
 ```
 users/{uid}                  username (unique, lowercase), name, bio, avatar
 usernames/{username}         { uid }                     – claim record that keeps usernames unique
-posts/{id}                   uid, title, type, media, mediaPath, thumb, width, height, views, likes, comments, createdAt
+posts/{id}                   uid, title, type (photo|video|post), media, mediaPath, thumb, width, height, views, likes, comments, createdAt
+                             type=post: blocks[{side, html, media, mediaType, thumb, ...}], excerpt
 posts/{id}/likes/{uid}       like marker (one per user)
 posts/{id}/comments/{id}     uid, parentId, body, createdAt
 ```
 
 Security rules enforce: you can only write as yourself; counters move by ±1 and likes are backed by a like document;
 only the author can delete a post; usernames are unique; uploads are limited by type/size and stored under your own uid.
+Post text is stored as HTML and is re-sanitized (strict tag/style whitelist) every time it is displayed.
 The `firebaseConfig` values in `public/firebase-config.js` are public identifiers, not secrets – the rules are what protect the data.

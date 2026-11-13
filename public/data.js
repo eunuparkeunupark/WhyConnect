@@ -17,6 +17,7 @@ import {
   getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject, connectStorageEmulator,
 } from 'https://www.gstatic.com/firebasejs/11.0.2/firebase-storage.js';
 import { firebaseConfig } from './firebase-config.js';
+import { plainText } from './richtext.js';
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -116,8 +117,13 @@ export async function updateProfile({ name, bio, avatarFile }) {
 /* ---------- posts ---------- */
 async function toPost(id, d) {
   return {
-    id, title: d.title, type: d.type, media: d.media, thumb: d.thumb || null,
-    mediaPath: d.mediaPath, thumbPath: d.thumbPath || null,
+    id, title: d.title, type: d.type, media: d.media || null, thumb: d.thumb || null,
+    mediaPath: d.mediaPath || null, thumbPath: d.thumbPath || null, excerpt: d.excerpt || '',
+    blocks: (d.blocks || []).map((b) => ({
+      side: b.side === 'right' ? 'right' : 'left', html: String(b.html || ''),
+      media: b.media || null, mediaType: b.mediaType || null, mediaPath: b.mediaPath || null,
+      thumb: b.thumb || null, thumbPath: b.thumbPath || null, width: b.width || 0, height: b.height || 0,
+    })),
     width: d.width, height: d.height, views: d.views || 0, likes: d.likes || 0, comments: d.comments || 0,
     createdAt: ms(d.createdAt), author: await getUserById(d.uid),
   };
@@ -204,6 +210,54 @@ export async function createPost({ file, thumb, title, width, height, onProgress
   return docRef.id;
 }
 
+/** A "Post": a title plus rows of text (rich HTML) with optional photo/video, placed left or right. */
+export async function createArticle({ title, blocks, onProgress, signal }) {
+  const uid = currentUid();
+  const id = crypto.randomUUID().replaceAll('-', '');
+  const total = blocks.flatMap((b) => [b.file, b.thumb]).filter(Boolean).reduce((n, f) => n + f.size, 0) || 1;
+  let done = 0;
+  const uploaded = [];
+  const upload = async (path, blob, contentType) => {
+    const r = ref(storage, path);
+    const task = uploadBytesResumable(r, blob, { contentType });
+    signal?.addEventListener('abort', () => task.cancel(), { once: true });
+    await new Promise((resolve, reject) => task.on('state_changed',
+      (s) => onProgress?.((done + s.bytesTransferred) / total), reject, resolve));
+    done += blob.size;
+    uploaded.push(path);
+    return getDownloadURL(r);
+  };
+  try {
+    const out = [];
+    for (const [i, b] of blocks.entries()) {
+      const o = { side: b.side, html: b.html, media: null, mediaType: null, mediaPath: null, thumb: null, thumbPath: null, width: 0, height: 0 };
+      if (b.file) {
+        o.mediaPath = `posts/${uid}/${id}-${i}.${EXT[b.file.type]}`;
+        o.media = await upload(o.mediaPath, b.file, b.file.type);
+        o.mediaType = b.file.type.startsWith('video/') ? 'video' : 'photo';
+        o.width = b.width; o.height = b.height;
+        if (b.thumb) {
+          o.thumbPath = `posts/${uid}/${id}-${i}-thumb.jpg`;
+          o.thumb = await upload(o.thumbPath, b.thumb, 'image/jpeg');
+        }
+      }
+      out.push(o);
+    }
+    const cover = out.find((o) => o.media && (o.thumb || o.mediaType === 'photo'));
+    const text = out.map((o) => plainText(o.html).trim()).find(Boolean) || '';
+    const docRef = await addDoc(collection(db, 'posts'), {
+      uid, title, type: 'post', blocks: out, excerpt: text.slice(0, 160),
+      thumb: cover ? (cover.thumb || cover.media) : null, thumbPath: null,
+      width: cover?.width || 1, height: cover?.height || 1,
+      views: 0, likes: 0, comments: 0, createdAt: serverTimestamp(),
+    });
+    return docRef.id;
+  } catch (e) {
+    await Promise.allSettled(uploaded.map((p) => deleteObject(ref(storage, p))));
+    throw e;
+  }
+}
+
 export async function deletePost(post) {
   // sub-collections first (the rules look at the parent post), best effort
   try {
@@ -219,5 +273,6 @@ export async function deletePost(post) {
   const batch = writeBatch(db);
   batch.delete(doc(db, 'posts', post.id));
   await batch.commit();
-  await Promise.allSettled([post.mediaPath, post.thumbPath].filter(Boolean).map((p) => deleteObject(ref(storage, p))));
+  const paths = [post.mediaPath, post.thumbPath, ...post.blocks.flatMap((b) => [b.mediaPath, b.thumbPath])];
+  await Promise.allSettled(paths.filter(Boolean).map((p) => deleteObject(ref(storage, p))));
 }

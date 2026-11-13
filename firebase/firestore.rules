@@ -42,15 +42,25 @@ service cloud.firestore {
     match /posts/{postId} {
       allow read: if true;
       allow create: if isUser(request.resource.data.uid)
-        && request.resource.data.keys().hasOnly(['uid', 'title', 'type', 'media', 'mediaPath', 'thumb', 'thumbPath', 'width', 'height', 'views', 'likes', 'comments', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['uid', 'title', 'type', 'media', 'mediaPath', 'thumb', 'thumbPath', 'width', 'height', 'views', 'likes', 'comments', 'createdAt', 'blocks', 'excerpt'])
         && request.resource.data.title is string && request.resource.data.title.size() >= 1 && request.resource.data.title.size() <= 100
-        && request.resource.data.type in ['photo', 'video']
-        && request.resource.data.media is string && request.resource.data.media.matches('^https?://.*')
-        && request.resource.data.mediaPath is string && request.resource.data.mediaPath.matches('^posts/' + request.auth.uid + '/.*')
         && request.resource.data.width is int && request.resource.data.height is int
         && request.resource.data.width > 0 && request.resource.data.height > 0
         && request.resource.data.views == 0 && request.resource.data.likes == 0 && request.resource.data.comments == 0
-        && request.resource.data.createdAt == request.time;
+        && request.resource.data.createdAt == request.time
+        && (
+          // single photo / video post
+          (request.resource.data.type in ['photo', 'video']
+            && !request.resource.data.keys().hasAny(['blocks', 'excerpt'])
+            && request.resource.data.media is string && request.resource.data.media.matches('^https?://.*')
+            && request.resource.data.mediaPath is string && request.resource.data.mediaPath.matches('^posts/' + request.auth.uid + '/.*'))
+          // article "Post": rows of rich text + optional media (HTML is sanitized by the client when rendering)
+          || (request.resource.data.type == 'post'
+            && request.resource.data.blocks is list
+            && request.resource.data.blocks.size() >= 1 && request.resource.data.blocks.size() <= 20
+            && request.resource.data.excerpt is string && request.resource.data.excerpt.size() <= 200
+            && !request.resource.data.keys().hasAny(['media', 'mediaPath']))
+        );
 
       // counters: +1 view for anyone, ±1 like backed by a like doc, comment count within a sane range
       allow update:
