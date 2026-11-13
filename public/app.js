@@ -158,7 +158,7 @@ function googleButton(then, err) {
         err.textContent = ex.code === 'auth/popup-blocked' ? 'Please allow pop-ups for this site and try again.'
           : ex.code === 'auth/unauthorized-domain' ? 'This domain is not authorized in Firebase yet.'
           : ex.code === 'auth/operation-not-allowed' ? 'Google sign-in is not enabled in Firebase.'
-          : ex.message;
+          : `${ex.message}${ex.status ? ` (HTTP ${ex.status})` : ex.code ? ` (${ex.code})` : ''}`;
       }
     } finally { btn.disabled = false; }
   });

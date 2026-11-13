@@ -131,7 +131,10 @@ app.post('/api/auth/firebase', async (req, res) => {
   let payload;
   try {
     payload = await getFirebaseAuth().verifyIdToken(String(req.body.idToken ?? ''));
-  } catch { throw new HttpError(401, 'Google sign-in failed'); }
+  } catch (e) {
+    console.warn('[auth/firebase] verifyIdToken failed:', e.code, e.message);
+    throw new HttpError(401, 'Google sign-in failed');
+  }
   if (payload.firebase?.sign_in_provider !== 'google.com' || !payload.email || !payload.email_verified) {
     throw new HttpError(401, 'A verified Google account is required');
   }
@@ -316,7 +319,7 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
     return res.status(status).json({ error: status === 413 ? 'File is too large (max 200MB)' : err.message });
   }
   const status = err.status || 500;
-  if (status >= 500) console.error(err);
+  if (status >= 500) console.error(`[${req.method} ${req.originalUrl}]`, err);
   res.status(status).json({ error: status >= 500 ? 'Something went wrong' : err.message });
 });
 
